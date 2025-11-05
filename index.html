@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Smart Ambulance Route Finder</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+  <style>
+    body {
+      margin: 0;
+      font-family: "Poppins", sans-serif;
+      background-color: #f8fafc;
+      text-align: center;
+    }
+    header {
+      background: #007bff;
+      color: white;
+      padding: 10px;
+    }
+    #controls {
+      margin: 10px;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+    select, button {
+      padding: 8px 12px;
+      border-radius: 6px;
+      border: 1px solid #ccc;
+      font-size: 1rem;
+    }
+    button {
+      background-color: #007bff;
+      color: white;
+      border: none;
+      cursor: pointer;
+      font-weight: 600;
+    }
+    button:hover {
+      background-color: #0056b3;
+    }
+    #map {
+      height: 80vh;
+      width: 95%;
+      margin: auto;
+      border-radius: 10px;
+      box-shadow: 0 0 10px rgba(0,0,0,0.2);
+    }
+    footer {
+      margin: 15px;
+      font-size: 0.9rem;
+      color: #444;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>🚑 Smart Ambulance Route Finder (with Traffic & Auto-Rerouting)</h1>
+  </header>
+
+  <div id="controls">
+    <label for="start">Ambulance Start:</label>
+    <select id="start"></select>
+
+    <label for="end">Hospital Destination:</label>
+    <select id="end"></select>
+
+    <button id="findRoute">Start Navigation</button>
+  </div>
+
+  <div id="map"></div>
+
+  <footer>
+    Made by <b>Mahesh Jella</b> | DS Project | Dijkstra + Live Traffic Simulation
+  </footer>
+
+  <script>
+    const apiKey = "eyJvcmciOiI1YjNjZTM1OTc4NTExMTAwMDFjZjYyNDgiLCJpZCI6IjEzNzExZTE4NjE4YTQxNDhiYjU1NzUxNTIxMTUxZTAzIiwiaCI6Im11cm11cjY0In0=";
+
+    const map = L.map("map").setView([17.385, 78.4867], 13);
+    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+      attribution: '© OpenStreetMap contributors'
+    }).addTo(map);
+
+    // City locations
+    const nodes = {
+      "City Center": [17.385, 78.4867],
+      "Main Hospital": [17.3885, 78.4905],
+      "Tech Park": [17.4001, 78.4933],
+      "Airport": [17.456, 78.466],
+      "Mall": [17.391, 78.479],
+      "Residential Area": [17.380, 78.495]
+    };
+
+    // Dropdown setup
+    const startSel = document.getElementById("start");
+    const endSel = document.getElementById("end");
+    Object.keys(nodes).forEach(place => {
+      const opt1 = new Option(place, place);
+      const opt2 = new Option(place, place);
+      startSel.add(opt1);
+      endSel.add(opt2);
+    });
+
+    Object.entries(nodes).forEach(([name, coord]) => {
+      L.marker(coord).addTo(map).bindPopup(`<b>${name}</b>`);
+    });
+
+    let routeLayer, ambulanceMarker, currentPath = [], rerouteTimer;
+
+    // Fetch route (real roads)
+    async function getRoute(start, end) {
+      const url = `https://api.openrouteservice.org/v2/directions/driving-car?api_key=${apiKey}&start=${nodes[start][1]},${nodes[start][0]}&end=${nodes[end][1]},${nodes[end][0]}`;
+      const res = await fetch(url);
+      const data = await res.json();
+      const coords = data.features[0].geometry.coordinates.map(c => [c[1], c[0]]);
+      return coords;
+    }
+
+    // Colorize traffic (random)
+    function getTrafficColor() {
+      const colors = ["#00FF00", "#FFFF00", "#FFA500", "#FF0000"]; // green → red
+      return colors[Math.floor(Math.random() * colors.length)];
+    }
+
+    // Draw route with color-coded traffic
+    function drawRoute(path) {
+      if (routeLayer) map.removeLayer(routeLayer);
+      const color = getTrafficColor();
+      routeLayer = L.polyline(path, { color, weight: 6, opacity: 0.8 }).addTo(map);
+      map.fitBounds(routeLayer.getBounds());
+    }
+
+    // Animate ambulance
+    function animateAmbulance(path) {
+      const ambulanceIcon = L.icon({
+        iconUrl: "https://cdn-icons-png.flaticon.com/512/2960/2960696.png",
+        iconSize: [45, 45]
+      });
+
+      if (ambulanceMarker) map.removeLayer(ambulanceMarker);
+      ambulanceMarker = L.marker(path[0], { icon: ambulanceIcon }).addTo(map);
+
+      let i = 0;
+      const move = setInterval(async () => {
+        if (i >= path.length) {
+          clearInterval(move);
+          ambulanceMarker.bindPopup("🏥 Reached Hospital!").openPopup();
+          clearInterval(rerouteTimer);
+          return;
+        }
+
+        ambulanceMarker.setLatLng(path[i]);
+        i += 4;
+
+        // Auto reroute every few seconds
+        if (Math.random() < 0.05) { // simulate sudden congestion
+          console.log("🚨 Traffic ahead! Rerouting...");
+          const newPath = await getRoute(startSel.value, endSel.value);
+          drawRoute(newPath);
+          animateAmbulance(newPath);
+          clearInterval(move);
+        }
+      }, 150);
+    }
+
+    // Dynamic traffic refresh
+    function startTrafficSimulation() {
+      rerouteTimer = setInterval(() => {
+        if (routeLayer) {
+          const color = getTrafficColor();
+          routeLayer.setStyle({ color });
+        }
+      }, 5000);
+    }
+
+    document.getElementById("findRoute").addEventListener("click", async () => {
+      const start = startSel.value;
+      const end = endSel.value;
+      if (start === end) return alert("Start and destination cannot be the same!");
+
+      const path = await getRoute(start, end);
+      drawRoute(path);
+      animateAmbulance(path);
+      startTrafficSimulation();
+    });
+  </script>
+</body>
+</html>
